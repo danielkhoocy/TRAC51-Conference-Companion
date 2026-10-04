@@ -1,0 +1,7 @@
+NODE_ENV=production
+ADMIN_USER=<choose a Secretariat username>
+ADMIN_PASSWORD=<choose a strong password>
+SESSION_SECRET=<random 32+ character secret>
+PARTICIPANT_SECRET=<random 32+ character secret>
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+RAILWAY_VOLUME_MOUNT_PATH=/data

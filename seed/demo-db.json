@@ -1,0 +1,182 @@
+{
+  "settings": {
+    "conferenceName": "TRAC51",
+    "dates": "20–22 November 2026",
+    "venue": "Ascott Hotel, Penang",
+    "theme": "Together in Purpose",
+    "participantLogin": "NRIC + last 6 digits of NRIC PIN"
+  },
+  "agenda": [
+    {
+      "id": 1,
+      "date": "2026-11-22",
+      "time": "10:30 AM",
+      "title": "Annual Conference Business",
+      "desc": "Opening business session and conference updates.",
+      "venue": "Ballroom 1",
+      "presenter": "Conference Secretary",
+      "report": "Annual Conference Report.pdf",
+      "slides": "Annual Conference Slides.pdf",
+      "status": "scheduled"
+    },
+    {
+      "id": 2,
+      "date": "2026-11-22",
+      "time": "11:15 AM",
+      "title": "Board of Finance Report",
+      "desc": "Finance report and stewardship updates.",
+      "venue": "Ballroom 1",
+      "presenter": "Chair, Board of Finance",
+      "report": "Board of Finance Report.pdf",
+      "slides": "Board of Finance Slides.pdf",
+      "status": "scheduled"
+    },
+    {
+      "id": 3,
+      "date": "2026-11-22",
+      "time": "12:30 PM",
+      "title": "Lunch & Fellowship",
+      "desc": "Hawker Flare lunch and fellowship.",
+      "venue": "Level 2",
+      "presenter": "Local Planning Committee",
+      "report": "",
+      "slides": "",
+      "status": "scheduled"
+    },
+    {
+      "id": 4,
+      "date": "2026-11-22",
+      "time": "2:00 PM",
+      "title": "District Reports",
+      "desc": "District superintendent updates and discussion.",
+      "venue": "Ballroom 1",
+      "presenter": "District Superintendents",
+      "report": "District Reports.pdf",
+      "slides": "",
+      "status": "scheduled"
+    }
+  ],
+  "currentLive": 1,
+  "delegates": [
+    {
+      "id": "D001",
+      "name": "Rev. Paul Santosh Christie",
+      "church": "Penang Trinity Church",
+      "district": "North",
+      "role": "District Superintendent",
+      "boards": "Board of Appointments; BOM",
+      "email": "paul@example.org",
+      "phone": "+60 12 345 6789",
+      "photo": "",
+      "nricHash": "905525fccbd6c5a18ca9fe8870e5389ab47535b0ebb88201ac52cbaa3f02f39c",
+      "pinHash": "91853a012940a90f19def15c3fff386d450563638e74cc415b464deb2c7905ce"
+    },
+    {
+      "id": "D002",
+      "name": "Gladys Tan Siew Hean",
+      "church": "George Town Methodist Church",
+      "district": "North",
+      "role": "Delegate",
+      "boards": "Board of Finance",
+      "email": "gladys@example.org",
+      "phone": "+60 11 234 5678",
+      "photo": "",
+      "nricHash": "9eb9d1d12542e7a43efbe18fdcf3cf7d16c7bd1e7ff69b657a78db158f3d3224",
+      "pinHash": "307c6ddc451055ac9e0b49859b96b04e795aa919d37555ec238ff54e41851086"
+    },
+    {
+      "id": "D003",
+      "name": "Noel Laujang",
+      "church": "Wesley Methodist Church Penang",
+      "district": "North",
+      "role": "Conference Secretariat",
+      "boards": "TRAC Secretariat",
+      "email": "noel@example.org",
+      "phone": "+60 13 456 7890",
+      "photo": "",
+      "nricHash": "05f2819e1c5b9b6a80315838a81f9e40f41b7f85c7243676cb782804d49dd061",
+      "pinHash": "18a68f3dee0b0e6c46a306ff02fbf42faf2cf025e589919458ccf40d7ee135ac"
+    }
+  ],
+  "feed": [
+    {
+      "id": 101,
+      "type": "Programme Update",
+      "time": "Just now",
+      "title": "Welcome to TRAC51",
+      "body": "Programme changes and important announcements will appear here.",
+      "image": "",
+      "published": true
+    },
+    {
+      "id": 102,
+      "type": "Reminder",
+      "time": "Today",
+      "title": "Heritage Trail registration",
+      "body": "Places are limited. Please register under Events & Sign-up.",
+      "image": "",
+      "published": true
+    }
+  ],
+  "events": [
+    {
+      "id": 201,
+      "name": "Morning Run",
+      "when": "Saturday, 21 November · 6:30 AM",
+      "place": "Meet at hotel lobby",
+      "spots": 32,
+      "capacity": 50,
+      "joinedBy": []
+    },
+    {
+      "id": 202,
+      "name": "Penang Heritage Trail",
+      "when": "Saturday, 21 November · 3:00 PM",
+      "place": "Meet at hotel lobby",
+      "spots": 11,
+      "capacity": 25,
+      "joinedBy": []
+    },
+    {
+      "id": 203,
+      "name": "Hawker Flare Lunch",
+      "when": "Sunday, 22 November · 12:30 PM",
+      "place": "Level 2",
+      "spots": 28,
+      "capacity": 100,
+      "joinedBy": []
+    }
+  ],
+  "docs": [
+    {
+      "id": 301,
+      "name": "Annual Conference Report.pdf",
+      "type": "Conference Report",
+      "path": ""
+    },
+    {
+      "id": 302,
+      "name": "Board of Finance Report.pdf",
+      "type": "Board Report",
+      "path": ""
+    },
+    {
+      "id": 303,
+      "name": "District Reports.pdf",
+      "type": "District Report",
+      "path": ""
+    }
+  ],
+  "photos": [],
+  "moderation": [
+    {
+      "id": 401,
+      "from": "Delegate D014",
+      "text": "Could we clarify the implementation timeline?",
+      "kind": "Question",
+      "status": "Pending",
+      "createdAt": "Just now"
+    }
+  ],
+  "helpRequests": []
+}
