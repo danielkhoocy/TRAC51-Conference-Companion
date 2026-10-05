@@ -115,14 +115,23 @@ async function api(path,options={}){
   if(!r.ok)throw new Error(d.error||'Request failed');
   return d;
 }
-async function loadPublic(){
+async function loadPublic(options={}){
   try{
-    const d=await api('/api/public'); app=Object.assign(app,d); viewer=app.viewer||null;
+    const d=await api('/api/public'); app=Object.assign(app,d); viewer=app.viewer||viewer||null;
+    if(!viewer) throw new Error('Participant session could not be verified.');
     $('participantGate').style.display='none';
     $('identityPill').textContent=(viewer?.name||'Participant')+' · Delegate';
     $('participantLogoutBtn').style.display='inline-flex';
     renderAll(); connectStream();
-  }catch(e){ viewer=null; $('participantGate').style.display='grid'; $('participantLogoutBtn').style.display='none'; }
+    return true;
+  }catch(e){
+    if(options.forceGate || /login required|sign in required|participant login required/i.test(e.message||'')){
+      viewer=null; $('participantGate').style.display='grid'; $('participantLogoutBtn').style.display='none';
+    } else {
+      $('participantLoginError').textContent=e.message || 'Unable to load the conference.';
+    }
+    return false;
+  }
 }
 function connectStream(){
   if(stream) stream.close();
@@ -146,8 +155,17 @@ function showParticipantGate(){ $('participantGate').style.display='grid'; $('pa
 function enterAdmin(){ $('participantGate').style.display='none'; openLogin(); }
 async function participantLogin(){
   const nric=$('participantNric').value.trim(), pin=$('participantPin').value.trim(); $('participantLoginError').textContent='';
-  try{await api('/api/participant/login',{method:'POST',body:JSON.stringify({nric,pin})}); await loadPublic(); toast('Welcome to TRAC51.');}
-  catch(e){$('participantLoginError').textContent=e.message;}
+  try{
+    const d=await api('/api/participant/login',{method:'POST',body:JSON.stringify({nric,pin})});
+    // Use the authenticated delegate returned by the login response immediately,
+    // so a successful login is not lost if the content bundle takes a moment to load.
+    viewer=d.delegate||null;
+    $('participantGate').style.display='none';
+    $('identityPill').textContent=(viewer?.name||'Participant')+' · Delegate';
+    $('participantLogoutBtn').style.display='inline-flex';
+    const loaded=await loadPublic();
+    if(loaded) toast('Welcome to TRAC51.');
+  } catch(e){$('participantLoginError').textContent=e.message;}
 }
 async function signOut(){try{await api(adminAuthed?'/api/logout':'/api/participant/logout',{method:'POST'});}catch(e){} viewer=null; adminAuthed=false; if(stream)stream.close(); $('participantLogoutBtn').style.display='none'; $('adminMode').style.display='none'; setMode('delegate'); showParticipantGate();}
 function showView(id){
