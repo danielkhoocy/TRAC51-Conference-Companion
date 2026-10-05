@@ -20,8 +20,8 @@ button,input,select,textarea{font:inherit} button{cursor:pointer}
 <header class="topbar">
   <div class="brand"><div class="mark">51</div><div><b>TRAC51</b><span>Conference Companion · Penang</span></div></div>
   <div class="top-actions">
-    <span class="pill" id="identityPill">TRAC51 PARTICIPANT</span><button class="pill" id="participantLogoutBtn" style="display:none;border:0" onclick="participantLogout()">Sign out</button>
-    <div class="toggle"><button id="delegateMode" class="active" onclick="setMode('delegate')">Delegate</button><button id="adminMode" onclick="setMode('admin')">Admin</button></div>
+    <span class="pill" id="identityPill">TRAC51 PARTICIPANT</span><button class="pill" id="participantLogoutBtn" style="display:none;border:0" onclick="signOut()">Sign out</button>
+    <div class="toggle"><button id="delegateMode" class="active" onclick="setMode('delegate')">Delegate</button><button id="adminMode" style="display:none" onclick="setMode('admin')">Admin</button></div>
   </div>
 </header>
 <div class="layout">
@@ -132,37 +132,29 @@ function connectStream(){
   stream.onerror=()=>{ stream.close(); setTimeout(()=>{ if(viewer) connectStream(); },5000); };
 }
 async function loadAdmin(){
-  try{app=Object.assign(app,await api('/api/admin'));adminAuthed=true;renderAll();}catch(e){adminAuthed=false;}
+  try{app=Object.assign(app,await api('/api/admin'));adminAuthed=true; $('adminMode').style.display='inline-flex'; renderAll();}catch(e){adminAuthed=false; $('adminMode').style.display='none';}
 }
+const ADMIN_VIEWS=new Set(['dashboard','live-control','moderation','content','library-admin','events-admin','help-admin','data']);
 function setMode(mode){
-  $('delegateMode').classList.toggle('active',mode==='delegate');
-  $('adminMode').classList.toggle('active',mode==='admin');
-  $('delegateNav').style.display=mode==='delegate'?'grid':'none';
-  $('adminNav').style.display=mode==='admin'?'grid':'none';
-  if(mode==='delegate'){
-    if(!viewer){showParticipantGate();return;}
-    $('participantGate').style.display='none';
-    showView('home');
-    return;
-  }
-  // Admin mode deliberately asks for credentials before rendering the admin area.
-  // This avoids the previous flow being interrupted by the dashboard render.
-  $('participantGate').style.display='none';
-  if(!adminAuthed){
-    openLogin();
-    return;
-  }
-  showView('dashboard');
+  if(mode==='admin' && !adminAuthed){ openLogin(); return; }
+  $('delegateMode').classList.toggle('active',mode==='delegate'); $('adminMode').classList.toggle('active',mode==='admin');
+  $('delegateNav').style.display=mode==='delegate'?'grid':'none'; $('adminNav').style.display=mode==='admin'?'grid':'none';
+  if(mode==='delegate'){ if(!viewer){showParticipantGate();return;} $('participantGate').style.display='none'; showView('home'); }
+  else { $('participantGate').style.display='none'; showView('dashboard'); }
 }
 function showParticipantGate(){ $('participantGate').style.display='grid'; $('participantLoginError').textContent=''; $('participantNric').focus(); }
-function enterAdmin(){ setMode('admin'); }
+function enterAdmin(){ $('participantGate').style.display='none'; openLogin(); }
 async function participantLogin(){
   const nric=$('participantNric').value.trim(), pin=$('participantPin').value.trim(); $('participantLoginError').textContent='';
   try{await api('/api/participant/login',{method:'POST',body:JSON.stringify({nric,pin})}); await loadPublic(); toast('Welcome to TRAC51.');}
   catch(e){$('participantLoginError').textContent=e.message;}
 }
-async function participantLogout(){try{await api('/api/participant/logout',{method:'POST'});}catch(e){} viewer=null; if(stream)stream.close(); $('participantLogoutBtn').style.display='none'; setMode('delegate'); showParticipantGate();}
-function showView(id){document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));$(id)?.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.remove('active'));const btn=[...document.querySelectorAll('.nav button')].find(b=>b.getAttribute('onclick')===`showView('${id}')`);if(btn)btn.classList.add('active');renderAll();}
+async function signOut(){try{await api(adminAuthed?'/api/logout':'/api/participant/logout',{method:'POST'});}catch(e){} viewer=null; adminAuthed=false; if(stream)stream.close(); $('participantLogoutBtn').style.display='none'; $('adminMode').style.display='none'; setMode('delegate'); showParticipantGate();}
+function showView(id){
+  if(ADMIN_VIEWS.has(id) && !adminAuthed) return;
+  if(!ADMIN_VIEWS.has(id) && !viewer && !adminAuthed) { showParticipantGate(); return; }
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));$(id)?.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.remove('active'));const btn=[...document.querySelectorAll('.nav button')].find(b=>b.getAttribute('onclick')===`showView('${id}')`);if(btn)btn.classList.add('active');renderAll();
+}
 function renderAll(){renderHome();renderAgenda();renderDelegates();renderFeed();renderEvents();renderLibrary();renderAdminAgenda();renderModeration();renderAdminFeed();renderDashboard();renderAdminEvents();renderHelpAdmin();renderAdminLibrary();renderInfo();renderLocal();}
 function live(){return app.agenda.find(a=>Number(a.id)===Number(app.currentLive))||app.agenda[0]||{};}
 function renderHome(){const a=live();$('viewerName').textContent=(viewer?.name||'there').split(' ').slice(-1)[0];$('liveTitle').textContent=a.title||'No live item';$('liveDesc').textContent=a.desc||'';$('livePresenter').textContent=a.presenter||'Conference programme';$('liveVenue').textContent=a.venue||'';$('adminLiveTitle').textContent=a.title||'No live item';$('homeAgenda').innerHTML=app.agenda.slice(0,8).map(x=>`<div class="agenda-item ${Number(x.id)===Number(app.currentLive)?'live':''}"><div class="agenda-time">${esc(x.time)}</div><div class="agenda-main"><div class="row"><div><b>${esc(x.title)}</b><div class="small">${esc(x.venue)}${x.presenter?' · '+esc(x.presenter):''}</div></div>${Number(x.id)===Number(app.currentLive)?'<span class="tag live">LIVE</span>':''}</div></div></div>`).join('');$('homeFeed').innerHTML=app.feed.slice(0,4).map(feedCard).join('');}
@@ -196,7 +188,8 @@ function editAgenda(id){const a=id?app.agenda.find(x=>Number(x.id)===Number(id))
 async function saveAgenda(id){const b={title:$('aTitle').value,time:$('aTime').value,venue:$('aVenue').value,presenterDelegateId:Number($('aPresenter').value||0)||null,desc:$('aDesc').value,contentDocumentId:Number($('aContentDoc').value||0)||null,reportDocumentId:Number($('aReportDoc').value||0)||null,date:'2026-11-22',status:'scheduled'};if(id)b.id=id;try{await api('/api/admin/agenda',{method:'POST',body:JSON.stringify(b)});closeModal();await loadAdmin();toast('Agenda saved, with document links.')}catch(e){toast(e.message)}}
 function openAgenda(id){const a=app.agenda.find(x=>Number(x.id)===Number(id));const c=docForRole(a,'content'),r=docForRole(a,'report');const p=a.presenter_profile;const photo=p?.photo_url?`<img src="${esc(p.photo_url)}" style="width:56px;height:56px;border-radius:50%;object-fit:cover">`:'';const contact=p?.email?`<a href="mailto:${esc(p.email)}">Email presenter</a>`:(p?.phone?`<a href="tel:${esc(p.phone)}">Call presenter</a>`:'Contact details not published');openCustom(a.title,`<div class="stack"><div class="muted-box"><div class="row">${photo}<div><b>${esc(a.presenter||'Conference programme')}</b><br><span class="small">${esc(a.venue)} · ${esc(a.time)}</span></div></div></div><div><b>What is being presented</b><div class="small">${c?`<button class="btn secondary small" onclick="window.open('${esc(c.path)}','_blank')">Open ${esc(c.name)}</button>`:'No presentation attached yet.'}</div></div><div><b>Associated report</b><div class="small">${r?`<button class="btn secondary small" onclick="window.open('${esc(r.path)}','_blank')">Open ${esc(r.name)}</button>`:'No report attached yet.'}</div></div><div>${contact}</div><div class="toolbar"><button class="btn" onclick="openQuestion(${Number(id)})">Ask a question / react</button></div></div>`)}
 function openSession(){openAgenda(app.currentLive)}
-function openQuestion(id){const a=app.agenda.find(x=>Number(x.id)===Number(id));openCustom('Question / reaction · '+esc(a.title),`<div class="stack"><input type="hidden" id="questionAgendaId" value="${Number(id)}"><textarea class="textarea" id="questionText" placeholder="Ask the presenter or add a reaction…"></textarea><button class="btn" onclick="submitQuestion()">Submit for moderation</button></div>`)}
+function openQuestion(id){const a=app.agenda.find(x=>Number(x.id)===Number(id));openCustom('Question / reaction · '+esc(a.title),`<div class="stack"><input type="hidden" id="questionAgendaId" value="${Number(id)}"><div><b>Quick reaction</b><div class="toolbar" style="margin-top:8px"><button class="btn secondary" onclick="submitReaction(${Number(id)},'👍')">👍 Like</button><button class="btn secondary" onclick="submitReaction(${Number(id)},'👏')">👏 Applause</button><button class="btn secondary" onclick="submitReaction(${Number(id)},'🙏')">🙏 Thanks</button></div></div><div><b>Question or comment</b><textarea class="textarea" id="questionText" placeholder="Ask the presenter or add a comment…"></textarea><button class="btn" onclick="submitQuestion()">Submit for moderation</button></div></div>`)}
+async function submitReaction(agendaId,reaction){try{await api('/api/questions',{method:'POST',body:JSON.stringify({agendaId,text:reaction,kind:'Reaction'})});closeModal();toast('Reaction sent for moderation.')}catch(e){toast(e.message)}}
 async function submitQuestion(){const text=$('questionText').value.trim();if(!text)return;const agendaId=Number($('questionAgendaId')?.value||app.currentLive);try{await api('/api/questions',{method:'POST',body:JSON.stringify({agendaId,text,kind:'Question'})});closeModal();toast('Submitted to Secretariat moderation.')}catch(e){toast(e.message)}}
 function openDocumentManager(id){const d=(app.docsAdmin||[]).find(x=>Number(x.id)===Number(id));if(!d)return;const vers=(app.documentVersions||[]).filter(v=>Number(v.document_id)===Number(d.id));openCustom('Manage document · '+esc(d.name),`<div class="stack"><div class="muted-box"><b>${esc(d.type)}</b><br>${d.related_agenda_title?`Linked to: ${esc(d.related_agenda_title)}`:'Not linked to an agenda'}</div><div><b>Version history</b>${vers.map(v=>`<div class="event" style="margin-top:8px"><div><b>v${v.version_no}</b> · ${esc(v.original_name)}<div class="small">${esc(v.created_at)} · ${esc(String(v.file_size||0))} bytes${Number(v.id)===Number(d.current_version_id)?' · CURRENT':''}</div></div><div class="toolbar">${Number(v.id)!==Number(d.current_version_id)?`<button class="btn secondary small" onclick="restoreVersion(${Number(d.id)},${Number(v.id)})">Make current</button>`:''}<button class="btn secondary small" onclick="window.open('${esc(v.path)}','_blank')">Open</button></div></div>`).join('')}</div><div class="muted-box"><b>Replace with a new version</b><input type="file" id="replaceDocFile" accept=".pdf,.png,.jpg,.jpeg,.webp" style="margin-top:8px"><button class="btn" style="margin-top:8px" onclick="replaceDocument(${Number(d.id)})">Upload replacement</button></div><div class="grid grid-2"><button class="btn secondary" onclick="linkDocument(${Number(d.id)})">Link / change agenda</button>${d.archived_at?`<button class="btn secondary" onclick="restoreDocument(${Number(d.id)})">Restore document</button>`:`<button class="btn secondary" onclick="archiveDocument(${Number(d.id)})">Archive / remove from Library</button>`}</div><button class="btn danger" onclick="deleteDocument(${Number(d.id)})">Delete permanently</button></div>`)}
 function openUploadDocument(relatedAgendaId='',role=''){openCustom('Upload document',`<div class="stack"><input class="input" id="newDocName" placeholder="Document name"><select class="select" id="newDocType"><option>Conference Report</option><option>Presentation</option><option>Guidance</option><option>Other</option></select><select class="select" id="newDocAgenda"><option value="">No agenda link</option>${app.agenda.map(a=>`<option value="${Number(a.id)}" ${Number(a.id)===Number(relatedAgendaId)?'selected':''}>${esc(a.time)} · ${esc(a.title)}</option>`).join('')}</select><select class="select" id="newDocRole"><option value="">No role</option><option value="content" ${role==='content'?'selected':''}>Content being presented</option><option value="report" ${role==='report'?'selected':''}>Associated report</option><option value="supporting">Supporting document</option></select><input type="file" id="newDocFile" accept=".pdf,.png,.jpg,.jpeg,.webp"><button class="btn" onclick="createDocumentFromLibrary()">Upload document</button></div>`)}
@@ -214,11 +207,11 @@ async function addDoc(){const f=$('docFile').files[0];if(!f)return toast('Choose
 async function addPhoto(){const f=$('photoFile').files[0];if(!f)return toast('Choose a photo first.');const data=await fileData(f);try{await api('/api/admin/upload',{method:'POST',body:JSON.stringify({filename:f.name,displayName:$('photoName').value||f.name,category:'photos',caption:$('photoName').value||'' ,data})});await loadAdmin();toast('Photo uploaded.')}catch(e){toast(e.message)}}
 function openCustom(title,body){$('modalTitle').textContent=title;$('modalBody').innerHTML=body;$('modal').classList.add('open')}
 function closeModal(){$('modal').classList.remove('open')}
-function openLogin(){openCustom('Admin sign in',`<div class="stack"><div class="notice">Secretariat access controls live agenda, announcements, moderation, uploads and delegate data.</div><input class="input" id="loginUser" placeholder="Username" autocomplete="username"><input class="input" id="loginPass" type="password" placeholder="Password" autocomplete="current-password"><div class="toolbar"><button class="btn" onclick="login()">Sign in</button><button class="btn secondary" onclick="closeModal();setMode('delegate')">Cancel</button></div></div>`);setTimeout(()=>$('loginUser')?.focus(),0)}
-async function login(){try{await api('/api/login',{method:'POST',body:JSON.stringify({username:$('loginUser').value,password:$('loginPass').value})});adminAuthed=true;closeModal();await loadAdmin();toast('Admin console unlocked.')}catch(e){toast('Sign in failed.')}}
+function openLogin(){openCustom('Admin sign in',`<div class="stack"><div class="notice">Admin access controls live agenda, announcements, moderation, uploads and delegate data.</div><input class="input" id="loginUser" placeholder="Username"><input class="input" id="loginPass" type="password" placeholder="Password"><button class="btn" onclick="login()">Sign in</button></div>`)}
+async function login(){try{await api('/api/login',{method:'POST',body:JSON.stringify({username:$('loginUser').value,password:$('loginPass').value})});adminAuthed=true;closeModal();$('adminMode').style.display='inline-flex';setMode('admin');await loadAdmin();toast('Admin console unlocked.')}catch(e){toast('Sign in failed.')}}
 function parseCSV(text){const rows=[];let row=[],cell='',q=false;for(let i=0;i<text.length;i++){const c=text[i],n=text[i+1];if(c==='"'){if(q&&n==='"'){cell+='"';i++;}else q=!q;}else if(c===','&&!q){row.push(cell);cell='';}else if((c==='\n'||c==='\r')&&!q){if(c==='\r'&&n==='\n')i++;row.push(cell);cell='';if(row.some(x=>x.trim()!==''))rows.push(row);row=[];}else cell+=c;}if(cell.length||row.length){row.push(cell);if(row.some(x=>x.trim()!==''))rows.push(row);}return rows;}
 async function importCSV(){const f=$('csvFile').files[0];if(!f){$('importStatus').textContent='Please choose a CSV file.';return;}const rows=parseCSV(await f.text());if(rows.length<2){$('importStatus').textContent='No delegate rows found.';return;}const headers=rows[0].map(x=>x.trim());const data=rows.slice(1).map(r=>{const o={};headers.forEach((h,i)=>o[h]=r[i]||'');return o;}).filter(x=>x.Name||x.name);try{const r=await api('/api/admin/import-delegates',{method:'POST',body:JSON.stringify({rows:data})});$('importStatus').textContent=`Processed ${r.total} delegate records. New: ${r.added}. Updated: ${r.updated}. Skipped: ${r.skipped}.`;await loadAdmin();}catch(e){$('importStatus').textContent=e.message}}
 function toast(msg){const t=document.createElement('div');t.textContent=msg;t.style.cssText='position:fixed;right:24px;bottom:24px;background:#17251f;color:white;padding:12px 16px;border-radius:12px;z-index:100;font-size:13px;box-shadow:0 12px 35px rgba(0,0,0,.18)';document.body.appendChild(t);setTimeout(()=>t.remove(),2600)}
-$('adminNav').style.display='none'; $('participantGate').style.display='grid'; loadPublic();
+$('adminNav').style.display='none'; $('adminMode').style.display='none'; $('participantGate').style.display='grid'; loadPublic();
 </script>
 </body></html>
