@@ -250,6 +250,7 @@ async function initDb() {
       presenter TEXT,
       presenter_email TEXT,
       presenter_phone TEXT,
+      presenter_delegate_id BIGINT REFERENCES delegates(id) ON DELETE SET NULL,
       report_name TEXT,
       report_path TEXT,
       slides_name TEXT,
@@ -288,7 +289,29 @@ async function initDb() {
       type TEXT NOT NULL DEFAULT 'Resource',
       path TEXT,
       related_agenda_id BIGINT REFERENCES agenda(id) ON DELETE SET NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      current_version_id BIGINT,
+      archived_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS document_versions (
+      id BIGSERIAL PRIMARY KEY,
+      document_id BIGINT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+      version_no INTEGER NOT NULL,
+      original_name TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      path TEXT NOT NULL,
+      file_size BIGINT NOT NULL DEFAULT 0,
+      uploaded_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(document_id, version_no)
+    );
+    CREATE TABLE IF NOT EXISTS agenda_document_links (
+      agenda_id BIGINT NOT NULL REFERENCES agenda(id) ON DELETE CASCADE,
+      document_id BIGINT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+      role TEXT NOT NULL CHECK (role IN ('content','report','supporting')),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (agenda_id, document_id, role)
     );
     CREATE TABLE IF NOT EXISTS photos (
       id BIGSERIAL PRIMARY KEY,
@@ -337,6 +360,52 @@ async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_registrations_event ON event_registrations(event_id);
     INSERT INTO conference_state(id) VALUES (1) ON CONFLICT (id) DO NOTHING;
   `);
+  await q(`ALTER TABLE agenda ADD COLUMN IF NOT EXISTS presenter_delegate_id BIGINT REFERENCES delegates(id) ON DELETE SET NULL`);
+  await q(`ALTER TABLE documents ADD COLUMN IF NOT EXISTS current_version_id BIGINT`);
+  await q(`ALTER TABLE documents ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
+  await q(`ALTER TABLE documents ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_agenda_presenter ON agenda(presenter_delegate_id)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_document_versions_doc ON document_versions(document_id, version_no DESC)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_agenda_doc_links_agenda ON agenda_document_links(agenda_id, role)`);
+  // Backfill legacy uploads into the versioned library model.
+  const legacyDocs = await q(`SELECT id, name, path FROM documents WHERE path IS NOT NULL AND archived_at IS NULL AND current_version_id IS NULL`);
+  for (const d of legacyDocs.rows) {
+    const abs = path.join(DATA_ROOT, d.path.replace(/^\/uploads\//, 'uploads/'));
+    try { const stat = await fs.promises.stat(abs); const mime = path.extname(abs).toLowerCase()==='.pdf' ? 'application/pdf' : 'application/octet-stream'; const v = await q(`INSERT INTO document_versions(document_id,version_no,original_name,mime_type,path,file_size,uploaded_by) VALUES($1,1,$2,$3,$4,$5,'migration') ON CONFLICT DO NOTHING RETURNING id`, [d.id,d.name,mime,d.path,stat.size]); if (v.rows[0]) await q('UPDATE documents SET current_version_id=$1, updated_at=NOW() WHERE id=$2', [v.rows[0].id,d.id]); } catch {}
+  }
+
+  // Promote legacy presenter text to a delegate-linked presenter where names match.
+  await q(`UPDATE agenda a SET presenter_delegate_id=d.id
+           FROM delegates d
+           WHERE a.presenter_delegate_id IS NULL AND a.presenter IS NOT NULL AND trim(a.presenter)<>'' AND lower(trim(a.presenter))=lower(trim(d.name))`);
+  // Migrate legacy agenda report/slides file paths into versioned Library documents and agenda links.
+  const legacyAgendaFiles = await q(`SELECT id, report_name, report_path, slides_name, slides_path FROM agenda`);
+  for (const a of legacyAgendaFiles.rows) {
+    const pairs = [
+      ['report', a.report_name, a.report_path, 'Conference Report'],
+      ['content', a.slides_name, a.slides_path, 'Presentation']
+    ];
+    for (const [role, name, filePath, type] of pairs) {
+      if (!filePath) continue;
+      const linked = await q('SELECT 1 FROM agenda_document_links WHERE agenda_id=$1 AND role=$2 LIMIT 1', [a.id, role]);
+      if (linked.rows[0]) continue;
+      const existing = await q('SELECT id FROM documents WHERE path=$1 AND archived_at IS NULL LIMIT 1', [filePath]);
+      let docId = existing.rows[0]?.id;
+      if (!docId) {
+        docId = (await q('INSERT INTO documents(name,type,path,related_agenda_id,updated_at) VALUES($1,$2,$3,$4,NOW()) RETURNING id', [name || filePath, type, filePath, a.id])).rows[0].id;
+        const abs = path.join(DATA_ROOT, filePath.replace(/^\/uploads\//, 'uploads/'));
+        try { const stat=await fs.promises.stat(abs); const mime=path.extname(abs).toLowerCase()==='.pdf'?'application/pdf':'application/octet-stream'; const v=(await q(`INSERT INTO document_versions(document_id,version_no,original_name,mime_type,path,file_size,uploaded_by) VALUES($1,1,$2,$3,$4,$5,'migration') RETURNING id`, [docId,name||path.basename(abs),mime,filePath,stat.size])).rows[0]; await q('UPDATE documents SET current_version_id=$1 WHERE id=$2',[v.id,docId]); } catch {}
+      }
+      await linkAgendaDocument(Number(a.id), Number(docId), role);
+    }
+  }
+  // Existing legacy related_agenda_id values become supporting links unless a more specific role exists.
+  const legacyRelations = await q(`SELECT id, related_agenda_id, type FROM documents WHERE related_agenda_id IS NOT NULL`);
+  for (const d of legacyRelations.rows) {
+    const role = /report/i.test(d.type) ? 'report' : /presentation|slides/i.test(d.type) ? 'content' : 'supporting';
+    const specific = await q('SELECT 1 FROM agenda_document_links WHERE agenda_id=$1 AND document_id=$2 LIMIT 1', [d.related_agenda_id,d.id]);
+    if (!specific.rows[0]) await linkAgendaDocument(Number(d.related_agenda_id), Number(d.id), role);
+  }
 
   const state = await q('SELECT COUNT(*)::int AS c FROM agenda');
   if (state.rows[0].c === 0 && fs.existsSync(seedPath) && process.env.SEED_DEMO === 'true') {
@@ -395,6 +464,8 @@ async function seedDemo() {
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(nric_hash) DO NOTHING`, [
       'DEMO-001', 'Demo Delegate', hmac(PARTICIPANT_SECRET || 'demo-secret', nric), hmac(PARTICIPANT_SECRET || 'demo-secret', nric.slice(-6)), 'Demo Methodist Church', 'Northern', 'Delegate', 'Board of Demonstration', '', '', ''
     ]);
+    const demoDelegate = await client.query("SELECT id FROM delegates WHERE external_id='DEMO-001' LIMIT 1");
+    if (demoDelegate.rows[0]) { const firstAgenda = await client.query('SELECT id FROM agenda ORDER BY sort_order,id LIMIT 1'); if (firstAgenda.rows[0]) await client.query('UPDATE agenda SET presenter_delegate_id=$1,presenter=$2 WHERE id=$3', [demoDelegate.rows[0].id, 'Demo Delegate', firstAgenda.rows[0].id]); }
     await client.query('COMMIT');
     console.log('Demo data seeded. Synthetic login: NRIC 900101145678 / PIN 145678');
   } catch (e) {
@@ -408,27 +479,44 @@ async function seedDemo() {
 async function getPublicBundle(delegateId) {
   const [state, agenda, delegates, feed, events, docs, photos, content] = await Promise.all([
     q('SELECT current_live_id FROM conference_state WHERE id=1'),
-    q('SELECT id, time_text AS time, title, description AS desc, venue, presenter, presenter_email, presenter_phone, report_name AS report, report_path, slides_name AS slides, slides_path, date_text AS date, status FROM agenda ORDER BY sort_order, time_text, id'),
+    q(`SELECT a.id, a.time_text AS time, a.title, a.description AS desc, a.venue,
+              a.presenter_delegate_id,
+              COALESCE(pd.name, a.presenter) AS presenter,
+              pd.email AS presenter_email, pd.phone AS presenter_phone, pd.photo_url AS presenter_photo_url,
+              a.date_text AS date, a.status,
+              COALESCE(json_agg(DISTINCT jsonb_build_object(
+                'id', d.id, 'name', d.name, 'type', d.type, 'path', d.path, 'role', l.role
+              )) FILTER (WHERE d.id IS NOT NULL AND d.archived_at IS NULL), '[]'::json) AS linked_documents
+       FROM agenda a
+       LEFT JOIN delegates pd ON pd.id=a.presenter_delegate_id
+       LEFT JOIN agenda_document_links l ON l.agenda_id=a.id
+       LEFT JOIN documents d ON d.id=l.document_id
+       GROUP BY a.id, pd.id
+       ORDER BY a.sort_order, a.time_text, a.id`),
     q(`SELECT id, external_id, name, church, district, conference_role, boards, email, phone, photo_url FROM delegates WHERE status='active' ORDER BY name`),
-    q('SELECT id, type, title, body, image_path AS image, to_char(created_at, \'HH24:MI\') AS time FROM feed WHERE published=true ORDER BY created_at DESC LIMIT 100'),
+    q(`SELECT id, type, title, body, image_path AS image, to_char(created_at, 'HH24:MI') AS time FROM feed WHERE published=true ORDER BY created_at DESC LIMIT 100`),
     q(`SELECT e.id, e.name, e.when_text AS "when", e.place, e.capacity, e.open,
         (e.capacity - COUNT(r.delegate_id))::int AS spots,
         EXISTS(SELECT 1 FROM event_registrations rr WHERE rr.event_id=e.id AND rr.delegate_id=$1) AS joined
         FROM events e LEFT JOIN event_registrations r ON r.event_id=e.id
         GROUP BY e.id ORDER BY e.created_at`, [delegateId]),
-    q('SELECT id, name, type, path, related_agenda_id AS related_agenda_id FROM documents ORDER BY created_at DESC'),
+    q(`SELECT d.id, d.name, d.type, d.path, d.related_agenda_id AS related_agenda_id,
+              d.current_version_id, COUNT(v.id)::int AS version_count
+       FROM documents d LEFT JOIN document_versions v ON v.document_id=d.id
+       WHERE d.archived_at IS NULL
+       GROUP BY d.id ORDER BY d.created_at DESC`),
     q('SELECT id, name, path, caption FROM photos ORDER BY created_at DESC'),
     q('SELECT slug, title, body FROM content_pages ORDER BY slug')
   ]);
   const viewerRow = delegates.rows.find(d => String(d.id) === String(delegateId));
   return {
     currentLive: state.rows[0]?.current_live_id ? Number(state.rows[0].current_live_id) : null,
-    agenda: agenda.rows.map(a => ({ ...a, id: Number(a.id) })),
+    agenda: agenda.rows.map(a => ({ ...a, id: Number(a.id), presenter_profile: (a.presenter_email || a.presenter_phone || a.presenter_photo_url) ? { email: a.presenter_email || '', phone: a.presenter_phone || '', photo_url: a.presenter_photo_url || '' } : null, linked_documents: Array.isArray(a.linked_documents) ? a.linked_documents : [] })),
     delegates: delegates.rows.map(publicDelegate),
     viewer: viewerRow ? publicDelegate(viewerRow) : null,
     feed: feed.rows.map(f => ({ ...f, id: Number(f.id) })),
     events: events.rows.map(e => ({ ...e, id: Number(e.id), capacity: Number(e.capacity), spots: Number(e.spots), joined: !!e.joined })),
-    docs: docs.rows.map(d => ({ ...d, id: Number(d.id) })),
+    docs: docs.rows.map(d => ({ ...d, id: Number(d.id), related_agenda_id: d.related_agenda_id ? Number(d.related_agenda_id) : null, version_count: Number(d.version_count || 0) })),
     photos: photos.rows.map(p => ({ ...p, id: Number(p.id) })),
     content: Object.fromEntries(content.rows.map(c => [c.slug, c])),
     settings: { title: 'TRAC51 Conference Companion' }
@@ -436,11 +524,11 @@ async function getPublicBundle(delegateId) {
 }
 
 async function getAdminBundle() {
-  const pub = await getPublicBundle((await q('SELECT id FROM delegates ORDER BY id LIMIT 1')).rows[0]?.id || 0);
-  const [moderation, help, stats] = await Promise.all([
+  const pub = await getPublicBundle((await q("SELECT id FROM delegates WHERE status='active' ORDER BY id LIMIT 1")).rows[0]?.id || 0);
+  const [moderation, help, stats, docs, versions] = await Promise.all([
     q(`SELECT m.id, m.text, m.kind, m.status, to_char(m.created_at, 'YYYY-MM-DD HH24:MI') AS created_at,
-              COALESCE(d.name,'Delegate') AS "from"
-       FROM moderation m LEFT JOIN delegates d ON d.id=m.delegate_id ORDER BY m.created_at DESC LIMIT 200`),
+              COALESCE(d.name,'Delegate') AS "from", a.title AS agenda_title
+       FROM moderation m LEFT JOIN delegates d ON d.id=m.delegate_id LEFT JOIN agenda a ON a.id=m.agenda_id ORDER BY m.created_at DESC LIMIT 200`),
     q(`SELECT h.id, h.type, h.text, h.status, to_char(h.created_at, 'YYYY-MM-DD HH24:MI') AS "createdAt",
               COALESCE(d.name,'Delegate') AS "from"
        FROM help_requests h LEFT JOIN delegates d ON d.id=h.delegate_id ORDER BY h.created_at DESC LIMIT 200`),
@@ -448,12 +536,22 @@ async function getAdminBundle() {
       (SELECT COUNT(*) FROM delegates WHERE status='active')::int AS delegates,
       (SELECT COUNT(*) FROM agenda)::int AS agenda,
       (SELECT COUNT(*) FROM events WHERE open=true)::int AS events,
-      (SELECT COUNT(*) FROM documents)::int AS docs,
+      (SELECT COUNT(*) FROM documents WHERE archived_at IS NULL)::int AS docs,
       (SELECT COUNT(*) FROM moderation WHERE status='Pending')::int AS pending,
-      (SELECT COUNT(*) FROM help_requests WHERE status='Open')::int AS open_help`)
+      (SELECT COUNT(*) FROM help_requests WHERE status='Open')::int AS open_help`),
+    q(`SELECT d.id, d.name, d.type, d.path, d.related_agenda_id AS related_agenda_id, d.current_version_id, d.archived_at,
+              a.title AS related_agenda_title, COUNT(v.id)::int AS version_count
+       FROM documents d LEFT JOIN document_versions v ON v.document_id=d.id
+       LEFT JOIN agenda a ON a.id=d.related_agenda_id
+       GROUP BY d.id, a.title ORDER BY d.archived_at NULLS FIRST, d.created_at DESC`),
+    q(`SELECT id, document_id, version_no, original_name, mime_type, path, file_size, uploaded_by,
+              to_char(created_at, 'YYYY-MM-DD HH24:MI') AS created_at
+       FROM document_versions ORDER BY document_id, version_no DESC`)
   ]);
   pub.moderation = moderation.rows.map(m => ({ ...m, id: Number(m.id) }));
   pub.helpRequests = help.rows.map(h => ({ ...h, id: Number(h.id) }));
+  pub.docsAdmin = docs.rows.map(d => ({ ...d, id: Number(d.id), related_agenda_id: d.related_agenda_id ? Number(d.related_agenda_id) : null, current_version_id: d.current_version_id ? Number(d.current_version_id) : null, version_count: Number(d.version_count || 0) }));
+  pub.documentVersions = versions.rows.map(v => ({ ...v, id: Number(v.id), document_id: Number(v.document_id), version_no: Number(v.version_no), file_size: Number(v.file_size || 0) }));
   pub.stats = stats.rows[0];
   return pub;
 }
@@ -500,7 +598,28 @@ async function saveUploadedFile(input, category) {
   const ext = path.extname(safeFileName(input.filename)).toLowerCase() || (mime === 'application/pdf' ? '.pdf' : '.bin');
   const filename = `${id}${ext}`;
   await fs.promises.writeFile(path.join(UPLOAD_ROOT, filename), buf, { flag: 'wx', mode: 0o600 });
-  return `/uploads/${filename}`;
+  return { path: `/uploads/${filename}`, mimeType: mime, size: buf.length, originalName: safeFileName(input.filename) };
+}
+
+async function createDocumentVersion(documentId, uploaded, actorId) {
+  const r = await q('SELECT COALESCE(MAX(version_no),0)::int AS max_no FROM document_versions WHERE document_id=$1', [documentId]);
+  const versionNo = Number(r.rows[0].max_no || 0) + 1;
+  const v = await q(`INSERT INTO document_versions(document_id,version_no,original_name,mime_type,path,file_size,uploaded_by)
+                     VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id`, [documentId, versionNo, uploaded.originalName, uploaded.mimeType, uploaded.path, uploaded.size, actorId || null]);
+  await q('UPDATE documents SET current_version_id=$1, path=$2, updated_at=NOW(), archived_at=NULL WHERE id=$3', [v.rows[0].id, uploaded.path, documentId]);
+  return { id: Number(v.rows[0].id), versionNo };
+}
+
+async function linkAgendaDocument(agendaId, documentId, role) {
+  if (!agendaId || !documentId || !['content','report','supporting'].includes(role)) return;
+  await q(`INSERT INTO agenda_document_links(agenda_id,document_id,role) VALUES($1,$2,$3)
+           ON CONFLICT (agenda_id,document_id,role) DO NOTHING`, [agendaId, documentId, role]);
+  await q('UPDATE documents SET related_agenda_id=$1, updated_at=NOW() WHERE id=$2', [agendaId, documentId]);
+}
+
+async function replaceAgendaRoleLinks(agendaId, role, documentId) {
+  await q('DELETE FROM agenda_document_links WHERE agenda_id=$1 AND role=$2', [agendaId, role]);
+  if (documentId) await linkAgendaDocument(agendaId, documentId, role);
 }
 
 const server = http.createServer(async (req, res) => {
@@ -586,20 +705,36 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/api/admin/agenda' && method === 'POST') {
-      const s = requireAdmin(req, res); if (!s) return;
+      const s = requireAdmin(req, res);
+      if (!s) return;
       const b = await body(req);
-      const fields = [cleanText(b.time, 100), cleanText(b.title, 250), cleanText(b.desc, 2000), cleanText(b.venue, 250), cleanText(b.presenter, 250), cleanText(b.presenterEmail, 250), cleanText(b.presenterPhone, 80), cleanText(b.report, 250), cleanText(b.slides, 250), cleanText(b.date, 50) || '2026-11-22', cleanText(b.status, 50) || 'scheduled'];
+      const fields = [cleanText(b.time, 100), cleanText(b.title, 250), cleanText(b.desc, 2000), cleanText(b.venue, 250), cleanText(b.date, 50) || '2026-11-22', cleanText(b.status, 50) || 'scheduled'];
       if (!fields[1]) return json(res, 400, { error: 'Agenda title is required' });
+      let id;
       if (b.id) {
-        const id = Number(b.id);
-        await q(`UPDATE agenda SET time_text=$1,title=$2,description=$3,venue=$4,presenter=$5,presenter_email=$6,presenter_phone=$7,report_name=$8,slides_name=$9,date_text=$10,status=$11,updated_at=NOW() WHERE id=$12`, [...fields, id]);
+        id = Number(b.id);
+        const presenterId = b.presenterDelegateId ? Number(b.presenterDelegateId) : null;
+        const presenter = presenterId ? await q("SELECT name,email,phone,photo_url FROM delegates WHERE id=$1 AND status='active'", [presenterId]) : { rows: [] };
+        if (presenterId && !presenter.rows[0]) return json(res, 400, { error: 'Presenter delegate not found.' });
+        await q(`UPDATE agenda SET time_text=$1,title=$2,description=$3,venue=$4,date_text=$5,status=$6,presenter_delegate_id=$7,
+                 presenter=$8,presenter_email=$9,presenter_phone=$10,updated_at=NOW() WHERE id=$11`, [
+          ...fields, presenterId, presenter.rows[0]?.name || '', presenter.rows[0]?.email || '', presenter.rows[0]?.phone || '', id
+        ]);
         await audit(s, 'agenda.updated', { agendaId: id });
       } else {
-        const r = await q(`INSERT INTO agenda(sort_order,time_text,title,description,venue,presenter,presenter_email,presenter_phone,report_name,slides_name,date_text,status) VALUES((SELECT COALESCE(MAX(sort_order)+1,1) FROM agenda),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`, fields);
-        await audit(s, 'agenda.created', { agendaId: Number(r.rows[0].id) });
+        const presenterId = b.presenterDelegateId ? Number(b.presenterDelegateId) : null;
+        const presenter = presenterId ? await q("SELECT name,email,phone FROM delegates WHERE id=$1 AND status='active'", [presenterId]) : { rows: [] };
+        const r = await q(`INSERT INTO agenda(sort_order,time_text,title,description,venue,date_text,status,presenter_delegate_id,presenter,presenter_email,presenter_phone)
+                           VALUES((SELECT COALESCE(MAX(sort_order)+1,1) FROM agenda),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`, [
+          ...fields, presenterId, presenter.rows[0]?.name || '', presenter.rows[0]?.email || '', presenter.rows[0]?.phone || ''
+        ]);
+        id = Number(r.rows[0].id);
+        await audit(s, 'agenda.created', { agendaId: id });
       }
+      await replaceAgendaRoleLinks(id, 'content', b.contentDocumentId ? Number(b.contentDocumentId) : null);
+      await replaceAgendaRoleLinks(id, 'report', b.reportDocumentId ? Number(b.reportDocumentId) : null);
       broadcast('content-change', { type: 'agenda' });
-      return json(res, 200, { ok: true });
+      return json(res, 200, { ok: true, id });
     }
 
     if (p === '/api/admin/agenda/delete' && method === 'POST') {
@@ -744,10 +879,64 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, added, updated, skipped, total: (await q('SELECT COUNT(*)::int AS c FROM delegates')).rows[0].c });
     }
 
+    if (p === '/api/admin/documents/upload' && method === 'POST') {
+      const s = requireAdmin(req, res); if (!s) return;
+      const b = await body(req, 30_000_000);
+      const uploaded = await saveUploadedFile(b, 'documents');
+      const name = cleanText(b.displayName || b.filename, 250); if (!name) return json(res, 400, { error: 'Document name is required.' });
+      const type = cleanText(b.documentType || b.type, 80) || 'Other';
+      const r = await q('INSERT INTO documents(name,type,path,related_agenda_id,updated_at) VALUES($1,$2,$3,$4,NOW()) RETURNING id', [name,type,uploaded.path,b.relatedAgendaId ? Number(b.relatedAgendaId) : null]);
+      const id = Number(r.rows[0].id);
+      const v = await createDocumentVersion(id, uploaded, s.actorId);
+      if (b.relatedAgendaId && b.role) await linkAgendaDocument(Number(b.relatedAgendaId), id, b.role);
+      await audit(s, 'document.created', { documentId:id, versionNo:v.versionNo, agendaId:b.relatedAgendaId ? Number(b.relatedAgendaId) : null, role:b.role || null });
+      broadcast('content-change', { type: 'documents' });
+      return json(res, 200, { ok:true, id, path:uploaded.path, versionNo:v.versionNo });
+    }
+
+    if (p === '/api/admin/documents/replace' && method === 'POST') {
+      const s = requireAdmin(req, res); if (!s) return;
+      const b = await body(req, 30_000_000); const id = Number(b.documentId); if (!id) return json(res,400,{error:'Document is required.'});
+      const exists = await q('SELECT id FROM documents WHERE id=$1', [id]); if (!exists.rows[0]) return json(res,404,{error:'Document not found.'});
+      const uploaded = await saveUploadedFile(b, 'documents');
+      const v = await createDocumentVersion(id, uploaded, s.actorId);
+      await q('UPDATE documents SET name=$1,type=$2,updated_at=NOW(),archived_at=NULL WHERE id=$3', [cleanText(b.displayName || b.filename,250), cleanText(b.documentType || b.type,80) || 'Other', id]);
+      await audit(s, 'document.replaced', { documentId:id, versionNo:v.versionNo });
+      broadcast('content-change', { type: 'documents' });
+      return json(res,200,{ok:true,id,versionNo:v.versionNo,path:uploaded.path});
+    }
+
+    if (p === '/api/admin/documents/link' && method === 'POST') {
+      const s = requireAdmin(req, res); if (!s) return;
+      const b = await body(req); const agendaId=Number(b.agendaId), documentId=Number(b.documentId); const role=b.role;
+      if (!agendaId || !documentId || !['content','report','supporting'].includes(role)) return json(res,400,{error:'Agenda, document and role are required.'});
+      await linkAgendaDocument(agendaId, documentId, role); if (role==='content' || role==='report') await replaceAgendaRoleLinks(agendaId, role, documentId);
+      await audit(s,'document.linked',{agendaId,documentId,role}); broadcast('content-change',{type:'agenda'}); return json(res,200,{ok:true});
+    }
+
+    if (p === '/api/admin/documents/unlink' && method === 'POST') {
+      const s = requireAdmin(req, res); if (!s) return; const b=await body(req); const agendaId=Number(b.agendaId), documentId=Number(b.documentId), role=cleanText(b.role,30); if(!agendaId||!documentId)return json(res,400,{error:'Agenda and document are required.'});
+      await q(`DELETE FROM agenda_document_links WHERE agenda_id=$1 AND document_id=$2 ${role?'AND role=$3':''}`, role?[agendaId,documentId,role]:[agendaId,documentId]); await audit(s,'document.unlinked',{agendaId,documentId,role:role||null}); broadcast('content-change',{type:'agenda'}); return json(res,200,{ok:true});
+    }
+
+    if (p === '/api/admin/documents/restore' && method === 'POST') {
+      const s = requireAdmin(req, res); if (!s) return; const b=await body(req); const documentId=Number(b.documentId), versionId=Number(b.versionId); const v=await q('SELECT id,document_id,path,original_name FROM document_versions WHERE id=$1 AND document_id=$2',[versionId,documentId]); if(!v.rows[0])return json(res,404,{error:'Version not found.'});
+      await q('UPDATE documents SET current_version_id=$1,path=$2,name=$3,archived_at=NULL,updated_at=NOW() WHERE id=$4',[versionId,v.rows[0].path,v.rows[0].original_name,documentId]); await audit(s,'document.version_restored',{documentId,versionId}); broadcast('content-change',{type:'documents'}); return json(res,200,{ok:true});
+    }
+
+    if (p === '/api/admin/documents/archive' && method === 'POST') {
+      const s=requireAdmin(req,res); if(!s)return; const b=await body(req); const id=Number(b.documentId); await q('UPDATE documents SET archived_at=NOW(),updated_at=NOW() WHERE id=$1',[id]); await audit(s,'document.archived',{documentId:id}); broadcast('content-change',{type:'documents'}); return json(res,200,{ok:true});
+    }
+
+    if (p === '/api/admin/documents/delete' && method === 'POST') {
+      const s=requireAdmin(req,res); if(!s)return; const b=await body(req); const id=Number(b.documentId); const versions=await q('SELECT path FROM document_versions WHERE document_id=$1',[id]); await q('DELETE FROM documents WHERE id=$1',[id]); for(const v of versions.rows){try{await fs.promises.unlink(path.join(DATA_ROOT,v.path.replace(/^\/uploads\//,'uploads/')))}catch{}} await audit(s,'document.deleted',{documentId:id}); broadcast('content-change',{type:'documents'}); return json(res,200,{ok:true});
+    }
+
     if (p === '/api/admin/upload' && method === 'POST') {
       const s = requireAdmin(req, res); if (!s) return;
       const b = await body(req, 30_000_000); const category = b.category === 'photos' ? 'photos' : 'documents';
-      const filePath = await saveUploadedFile(b, category);
+      const uploaded = await saveUploadedFile(b, category);
+      const filePath = uploaded.path;
       if (category === 'photos') {
         const r = await q('INSERT INTO photos(name,path,caption) VALUES($1,$2,$3) RETURNING id', [cleanText(b.displayName || b.filename, 250), filePath, cleanText(b.caption, 500)]);
         await audit(s, 'photo.uploaded', { photoId: Number(r.rows[0].id) });

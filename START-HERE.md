@@ -157,3 +157,8 @@ For Postgres, consider enabling point-in-time recovery as an additional protecti
 - Test delegate import.
 - Test moderation and help desk.
 - Confirm the organisation's privacy notice and data governance approval before importing actual NRIC data.
+
+## Agenda + Library management (Build 2.1)
+Agenda editing now lets Secretariat select a presenter from the delegate directory and link a presentation and report from the Library. Existing sessions can also upload and attach a new presentation/report directly. The Library now supports versioned replacement, restore, link/unlink through the agenda editor, archiving and permanent deletion.
+
+When updating an existing Railway deployment, simply replace the files in the GitHub repository with this package and wait for Railway to deploy. The database schema upgrades itself at startup.
