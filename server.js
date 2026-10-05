@@ -677,9 +677,18 @@ const server = http.createServer(async (req, res) => {
       const nric = normalizeNRIC(b.nric);
       const pin = String(b.pin || '');
       if (nric.length !== 12 || !/^\d{6}$/.test(pin)) return json(res, 400, { error: 'Enter your 12-digit NRIC and 6-digit PIN.' });
+
+      // In demo/test mode, ensure the synthetic delegate exists before lookup.
+      // This makes the test login reliable even if the service was deployed before
+      // the SEED_DEMO variable was added or changed. It never runs when SEED_DEMO is false.
+      if (process.env.SEED_DEMO === 'true' && nric === '900101145678' && pin === '145678') {
+        await ensureDemoDelegate();
+      }
+
       const row = await q(`SELECT id, external_id, name, church, district, conference_role, boards, email, phone, photo_url, nric_hash, pin_hash FROM delegates WHERE status='active' AND nric_hash=$1 LIMIT 1`, [hmac(PARTICIPANT_SECRET, nric)]);
       const d = row.rows[0];
-      if (!d || !safeEqual(d.pin_hash, hmac(PARTICIPANT_SECRET, pin))) return json(res, 401, { error: 'Invalid NRIC or PIN' });
+      if (!d) return json(res, 401, { error: 'Delegate not found. Please check that your conference registration has been imported.' });
+      if (!safeEqual(d.pin_hash, hmac(PARTICIPANT_SECRET, pin))) return json(res, 401, { error: 'Incorrect PIN. Please use the last 6 digits of your NRIC.' });
       setSession(res, { kind: 'participant', delegateId: String(d.id) }, 60 * 60 * 24);
       await audit({ kind: 'participant', actorId: String(d.id) }, 'participant.login');
       return json(res, 200, { ok: true, delegate: publicDelegate(d) });

@@ -1,6 +1,6 @@
 {
   "name": "trac51-conference-companion",
-  "version": "2.1.0",
+  "version": "2.3.0",
   "private": true,
   "description": "TRAC51 Conference Companion - Railway production build",
   "main": "server.js",
