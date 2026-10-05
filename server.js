@@ -411,6 +411,13 @@ async function initDb() {
   if (state.rows[0].c === 0 && fs.existsSync(seedPath) && process.env.SEED_DEMO === 'true') {
     await seedDemo();
   }
+  // Keep the synthetic test participant independent from whether agenda seed data already exists.
+  // Turning SEED_DEMO off deactivates the synthetic account so it cannot be used in production.
+  if (process.env.SEED_DEMO === 'true') {
+    await ensureDemoDelegate();
+  } else {
+    await q("UPDATE delegates SET status='inactive', updated_at=NOW() WHERE external_id='DEMO-001'");
+  }
 
   const pageCount = await q('SELECT COUNT(*)::int AS c FROM content_pages');
   if (pageCount.rows[0].c === 0) {
@@ -427,6 +434,32 @@ async function initDb() {
       await q('INSERT INTO content_pages(slug,title,body) VALUES($1,$2,$3) ON CONFLICT(slug) DO NOTHING', [slug, title, bodyText]);
     }
   }
+}
+
+async function ensureDemoDelegate() {
+  const nric = '900101145678';
+  const delegate = {
+    externalId: 'DEMO-001',
+    name: 'Demo Delegate',
+    nricHash: hmac(PARTICIPANT_SECRET || 'demo-secret', nric),
+    pinHash: hmac(PARTICIPANT_SECRET || 'demo-secret', nric.slice(-6)),
+  };
+  await q(`INSERT INTO delegates(external_id,name,nric_hash,pin_hash,church,district,conference_role,boards,email,phone,photo_url,status,updated_at)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'active',NOW())
+    ON CONFLICT(external_id) DO UPDATE SET
+      name=EXCLUDED.name, nric_hash=EXCLUDED.nric_hash, pin_hash=EXCLUDED.pin_hash,
+      church=EXCLUDED.church, district=EXCLUDED.district, conference_role=EXCLUDED.conference_role,
+      boards=EXCLUDED.boards, email=EXCLUDED.email, phone=EXCLUDED.phone, photo_url=EXCLUDED.photo_url,
+      status='active', updated_at=NOW()`, [
+    delegate.externalId, delegate.name, delegate.nricHash, delegate.pinHash,
+    'Demo Methodist Church', 'Northern', 'Delegate', 'Board of Demonstration', '', '', ''
+  ]);
+  const d = await q("SELECT id FROM delegates WHERE external_id='DEMO-001' LIMIT 1");
+  if (d.rows[0]) {
+    const first = await q('SELECT id FROM agenda ORDER BY sort_order,id LIMIT 1');
+    if (first.rows[0]) await q('UPDATE agenda SET presenter_delegate_id=$1,presenter=$2 WHERE id=$3', [d.rows[0].id, 'Demo Delegate', first.rows[0].id]);
+  }
+  console.log('Demo participant available: NRIC 900101145678 / PIN 145678');
 }
 
 async function seedDemo() {
@@ -458,16 +491,8 @@ async function seedDemo() {
     for (const p of (demo.photos || [])) {
       if (p.path && p.path.startsWith('/uploads/')) continue;
     }
-    // Synthetic demo participant. Clearly marked, never use this row for real conference data.
-    const nric = '900101145678';
-    await client.query(`INSERT INTO delegates(external_id,name,nric_hash,pin_hash,church,district,conference_role,boards,email,phone,photo_url)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(nric_hash) DO NOTHING`, [
-      'DEMO-001', 'Demo Delegate', hmac(PARTICIPANT_SECRET || 'demo-secret', nric), hmac(PARTICIPANT_SECRET || 'demo-secret', nric.slice(-6)), 'Demo Methodist Church', 'Northern', 'Delegate', 'Board of Demonstration', '', '', ''
-    ]);
-    const demoDelegate = await client.query("SELECT id FROM delegates WHERE external_id='DEMO-001' LIMIT 1");
-    if (demoDelegate.rows[0]) { const firstAgenda = await client.query('SELECT id FROM agenda ORDER BY sort_order,id LIMIT 1'); if (firstAgenda.rows[0]) await client.query('UPDATE agenda SET presenter_delegate_id=$1,presenter=$2 WHERE id=$3', [demoDelegate.rows[0].id, 'Demo Delegate', firstAgenda.rows[0].id]); }
     await client.query('COMMIT');
-    console.log('Demo data seeded. Synthetic login: NRIC 900101145678 / PIN 145678');
+    console.log('Demo data seeded. Synthetic conference content created.');
   } catch (e) {
     await client.query('ROLLBACK');
     console.error('Demo seed failed', e);

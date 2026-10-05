@@ -1,4 +1,4 @@
-# TRAC51 Conference Companion — Production Build
+# TRAC51 Conference Companion — Production Build v2.2
 
 This build is designed for a simple **Railway + GoDaddy** deployment.
 
@@ -31,3 +31,13 @@ Read `START-HERE.md`.
 
 ## Important
 This is a deployment-ready application package, but the final production deployment still requires the organisation to create its own Railway account, secrets, database, domain records and privacy/security approvals. Never commit real delegate NRIC data or production secrets to GitHub.
+
+## v2.2 fixes
+- Demo participant seeding no longer depends on agenda seed data already existing.
+- Participants cannot switch into or navigate to admin views in the UI.
+- All admin API endpoints remain server-side protected by admin sessions.
+- Participant actions remain limited to viewing, registering, reacting, asking questions, and help requests.
+- Added quick reactions to agenda sessions.
+
+## Demo testing
+Set `SEED_DEMO=true` temporarily and redeploy to activate the synthetic participant `900101145678` / `145678`. After testing, set it back to `false` and redeploy; the demo account is automatically deactivated.
