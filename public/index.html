@@ -135,13 +135,27 @@ async function loadAdmin(){
   try{app=Object.assign(app,await api('/api/admin'));adminAuthed=true;renderAll();}catch(e){adminAuthed=false;}
 }
 function setMode(mode){
-  $('delegateMode').classList.toggle('active',mode==='delegate'); $('adminMode').classList.toggle('active',mode==='admin');
-  $('delegateNav').style.display=mode==='delegate'?'grid':'none'; $('adminNav').style.display=mode==='admin'?'grid':'none';
-  if(mode==='delegate'){ if(!viewer){showParticipantGate();return;} $('participantGate').style.display='none'; showView('home'); }
-  else { $('participantGate').style.display='none'; showView('dashboard'); if(!adminAuthed)openLogin(); }
+  $('delegateMode').classList.toggle('active',mode==='delegate');
+  $('adminMode').classList.toggle('active',mode==='admin');
+  $('delegateNav').style.display=mode==='delegate'?'grid':'none';
+  $('adminNav').style.display=mode==='admin'?'grid':'none';
+  if(mode==='delegate'){
+    if(!viewer){showParticipantGate();return;}
+    $('participantGate').style.display='none';
+    showView('home');
+    return;
+  }
+  // Admin mode deliberately asks for credentials before rendering the admin area.
+  // This avoids the previous flow being interrupted by the dashboard render.
+  $('participantGate').style.display='none';
+  if(!adminAuthed){
+    openLogin();
+    return;
+  }
+  showView('dashboard');
 }
 function showParticipantGate(){ $('participantGate').style.display='grid'; $('participantLoginError').textContent=''; $('participantNric').focus(); }
-function enterAdmin(){ $('participantGate').style.display='none'; setMode('admin'); }
+function enterAdmin(){ setMode('admin'); }
 async function participantLogin(){
   const nric=$('participantNric').value.trim(), pin=$('participantPin').value.trim(); $('participantLoginError').textContent='';
   try{await api('/api/participant/login',{method:'POST',body:JSON.stringify({nric,pin})}); await loadPublic(); toast('Welcome to TRAC51.');}
@@ -200,7 +214,7 @@ async function addDoc(){const f=$('docFile').files[0];if(!f)return toast('Choose
 async function addPhoto(){const f=$('photoFile').files[0];if(!f)return toast('Choose a photo first.');const data=await fileData(f);try{await api('/api/admin/upload',{method:'POST',body:JSON.stringify({filename:f.name,displayName:$('photoName').value||f.name,category:'photos',caption:$('photoName').value||'' ,data})});await loadAdmin();toast('Photo uploaded.')}catch(e){toast(e.message)}}
 function openCustom(title,body){$('modalTitle').textContent=title;$('modalBody').innerHTML=body;$('modal').classList.add('open')}
 function closeModal(){$('modal').classList.remove('open')}
-function openLogin(){openCustom('Admin sign in',`<div class="stack"><div class="notice">Admin access controls live agenda, announcements, moderation, uploads and delegate data.</div><input class="input" id="loginUser" placeholder="Username"><input class="input" id="loginPass" type="password" placeholder="Password"><button class="btn" onclick="login()">Sign in</button></div>`)}
+function openLogin(){openCustom('Admin sign in',`<div class="stack"><div class="notice">Secretariat access controls live agenda, announcements, moderation, uploads and delegate data.</div><input class="input" id="loginUser" placeholder="Username" autocomplete="username"><input class="input" id="loginPass" type="password" placeholder="Password" autocomplete="current-password"><div class="toolbar"><button class="btn" onclick="login()">Sign in</button><button class="btn secondary" onclick="closeModal();setMode('delegate')">Cancel</button></div></div>`);setTimeout(()=>$('loginUser')?.focus(),0)}
 async function login(){try{await api('/api/login',{method:'POST',body:JSON.stringify({username:$('loginUser').value,password:$('loginPass').value})});adminAuthed=true;closeModal();await loadAdmin();toast('Admin console unlocked.')}catch(e){toast('Sign in failed.')}}
 function parseCSV(text){const rows=[];let row=[],cell='',q=false;for(let i=0;i<text.length;i++){const c=text[i],n=text[i+1];if(c==='"'){if(q&&n==='"'){cell+='"';i++;}else q=!q;}else if(c===','&&!q){row.push(cell);cell='';}else if((c==='\n'||c==='\r')&&!q){if(c==='\r'&&n==='\n')i++;row.push(cell);cell='';if(row.some(x=>x.trim()!==''))rows.push(row);row=[];}else cell+=c;}if(cell.length||row.length){row.push(cell);if(row.some(x=>x.trim()!==''))rows.push(row);}return rows;}
 async function importCSV(){const f=$('csvFile').files[0];if(!f){$('importStatus').textContent='Please choose a CSV file.';return;}const rows=parseCSV(await f.text());if(rows.length<2){$('importStatus').textContent='No delegate rows found.';return;}const headers=rows[0].map(x=>x.trim());const data=rows.slice(1).map(r=>{const o={};headers.forEach((h,i)=>o[h]=r[i]||'');return o;}).filter(x=>x.Name||x.name);try{const r=await api('/api/admin/import-delegates',{method:'POST',body:JSON.stringify({rows:data})});$('importStatus').textContent=`Processed ${r.total} delegate records. New: ${r.added}. Updated: ${r.updated}. Skipped: ${r.skipped}.`;await loadAdmin();}catch(e){$('importStatus').textContent=e.message}}
