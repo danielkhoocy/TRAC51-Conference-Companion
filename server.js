@@ -504,7 +504,7 @@ async function seedDemo() {
 async function getPublicBundle(delegateId) {
   const [state, agenda, delegates, feed, events, docs, photos, content] = await Promise.all([
     q('SELECT current_live_id FROM conference_state WHERE id=1'),
-    q(`SELECT a.id, a.time_text AS time, a.title, a.description AS desc, a.venue,
+    q(`SELECT a.id, a.sort_order, a.time_text AS time, a.title, a.description AS desc, a.venue,
               a.presenter_delegate_id,
               COALESCE(pd.name, a.presenter) AS presenter,
               pd.email AS presenter_email, pd.phone AS presenter_phone, pd.photo_url AS presenter_photo_url,
@@ -517,7 +517,7 @@ async function getPublicBundle(delegateId) {
        LEFT JOIN agenda_document_links l ON l.agenda_id=a.id
        LEFT JOIN documents d ON d.id=l.document_id
        GROUP BY a.id, pd.id
-       ORDER BY a.sort_order, a.time_text, a.id`),
+       ORDER BY a.date_text, a.sort_order, a.time_text, a.id`),
     q(`SELECT id, external_id, name, church, district, conference_role, boards, email, phone, photo_url FROM delegates WHERE status='active' ORDER BY name`),
     q(`SELECT id, type, title, body, image_path AS image, to_char(created_at, 'HH24:MI') AS time FROM feed WHERE published=true ORDER BY created_at DESC LIMIT 100`),
     q(`SELECT e.id, e.name, e.when_text AS "when", e.place, e.capacity, e.open,
@@ -730,8 +730,9 @@ const server = http.createServer(async (req, res) => {
       const s = requireAdmin(req, res); if (!s) return;
       const b = await body(req);
       const id = Number(b.id);
-      const exists = await q('SELECT id FROM agenda WHERE id=$1', [id]);
+      const exists = await q('SELECT id,status FROM agenda WHERE id=$1', [id]);
       if (!exists.rows[0]) return json(res, 404, { error: 'Agenda item not found' });
+      if (exists.rows[0].status === 'cancelled') return json(res, 409, { error: 'A cancelled session cannot be set LIVE. Update its status first.' });
       await q('UPDATE conference_state SET current_live_id=$1, updated_at=NOW() WHERE id=1', [id]);
       await audit(s, 'agenda.live_changed', { agendaId: id });
       broadcast('live-change', { agendaId: id });
@@ -750,16 +751,18 @@ const server = http.createServer(async (req, res) => {
         const presenterId = b.presenterDelegateId ? Number(b.presenterDelegateId) : null;
         const presenter = presenterId ? await q("SELECT name,email,phone,photo_url FROM delegates WHERE id=$1 AND status='active'", [presenterId]) : { rows: [] };
         if (presenterId && !presenter.rows[0]) return json(res, 400, { error: 'Presenter delegate not found.' });
-        await q(`UPDATE agenda SET time_text=$1,title=$2,description=$3,venue=$4,date_text=$5,status=$6,presenter_delegate_id=$7,
+        await q(`UPDATE agenda SET sort_order=CASE WHEN date_text<>$5 THEN (SELECT COALESCE(MAX(sort_order)+1,1) FROM agenda WHERE date_text=$5 AND id<>$11) ELSE sort_order END,
+                 time_text=$1,title=$2,description=$3,venue=$4,date_text=$5,status=$6,presenter_delegate_id=$7,
                  presenter=$8,presenter_email=$9,presenter_phone=$10,updated_at=NOW() WHERE id=$11`, [
           ...fields, presenterId, presenter.rows[0]?.name || '', presenter.rows[0]?.email || '', presenter.rows[0]?.phone || '', id
         ]);
+        if (fields[5] === 'cancelled') await q('UPDATE conference_state SET current_live_id=NULL WHERE id=1 AND current_live_id=$1', [id]);
         await audit(s, 'agenda.updated', { agendaId: id });
       } else {
         const presenterId = b.presenterDelegateId ? Number(b.presenterDelegateId) : null;
         const presenter = presenterId ? await q("SELECT name,email,phone FROM delegates WHERE id=$1 AND status='active'", [presenterId]) : { rows: [] };
         const r = await q(`INSERT INTO agenda(sort_order,time_text,title,description,venue,date_text,status,presenter_delegate_id,presenter,presenter_email,presenter_phone)
-                           VALUES((SELECT COALESCE(MAX(sort_order)+1,1) FROM agenda),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`, [
+                           VALUES((SELECT COALESCE(MAX(sort_order)+1,1) FROM agenda WHERE date_text=$5),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`, [
           ...fields, presenterId, presenter.rows[0]?.name || '', presenter.rows[0]?.email || '', presenter.rows[0]?.phone || ''
         ]);
         id = Number(r.rows[0].id);
@@ -771,11 +774,31 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, id });
     }
 
+    if (p === '/api/admin/agenda/reorder' && method === 'POST') {
+      const s = requireAdmin(req, res); if (!s) return;
+      const b = await body(req); const id = Number(b.id); const direction = b.direction;
+      if (!id || !['up','down'].includes(direction)) return json(res, 400, { error: 'Agenda item and valid direction are required.' });
+      const current = await q('SELECT id,date_text,sort_order FROM agenda WHERE id=$1', [id]);
+      if (!current.rows[0]) return json(res, 404, { error: 'Agenda item not found.' });
+      const siblings = await q('SELECT id,sort_order FROM agenda WHERE date_text=$1 ORDER BY sort_order,time_text,id', [current.rows[0].date_text]);
+      const index = siblings.rows.findIndex(x => Number(x.id) === id);
+      const neighbourIndex = direction === 'up' ? index - 1 : index + 1;
+      if (neighbourIndex < 0 || neighbourIndex >= siblings.rows.length) return json(res, 200, { ok: true, moved: false });
+      const currentRow = siblings.rows[index], neighbour = siblings.rows[neighbourIndex];
+      await q(`UPDATE agenda SET sort_order = CASE WHEN id=$1 THEN $3 WHEN id=$2 THEN $4 ELSE sort_order END WHERE id IN ($1,$2)`, [id, Number(neighbour.id), Number(neighbour.sort_order), Number(currentRow.sort_order)]);
+      await audit(s, 'agenda.reordered', { agendaId: id, direction });
+      broadcast('content-change', { type: 'agenda' });
+      return json(res, 200, { ok: true, moved: true });
+    }
+
     if (p === '/api/admin/agenda/delete' && method === 'POST') {
       const s = requireAdmin(req, res); if (!s) return;
       const b = await body(req); const id = Number(b.id);
-      await q('DELETE FROM agenda WHERE id=$1', [id]);
+      if (!id) return json(res, 400, { error: 'A valid agenda item is required.' });
+      const exists = await q('SELECT id FROM agenda WHERE id=$1', [id]);
+      if (!exists.rows[0]) return json(res, 404, { error: 'Agenda item not found.' });
       await q('UPDATE conference_state SET current_live_id=NULL WHERE id=1 AND current_live_id=$1', [id]);
+      await q('DELETE FROM agenda WHERE id=$1', [id]);
       await audit(s, 'agenda.deleted', { agendaId: id });
       broadcast('content-change', { type: 'agenda' });
       return json(res, 200, { ok: true });
