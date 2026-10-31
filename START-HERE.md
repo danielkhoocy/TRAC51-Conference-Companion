@@ -162,15 +162,3 @@ For Postgres, consider enabling point-in-time recovery as an additional protecti
 Agenda editing now lets Secretariat select a presenter from the delegate directory and link a presentation and report from the Library. Existing sessions can also upload and attach a new presentation/report directly. The Library now supports versioned replacement, restore, link/unlink through the agenda editor, archiving and permanent deletion.
 
 When updating an existing Railway deployment, simply replace the files in the GitHub repository with this package and wait for Railway to deploy. The database schema upgrades itself at startup.
-
-
-## Updating to v2.4 — Agenda Maintenance
-1. Download and unzip the v2.4 package.
-2. Replace the contents of the existing private GitHub repository with the contents of the `trac51-railway-production` folder.
-3. Do not change or delete Railway variables, Postgres, or the `/data` volume.
-4. Railway will deploy the new commit automatically.
-5. After the deployment shows Success, sign in to the Admin Console.
-6. Open **Agenda Maintenance** to add, view, edit, delete, search, filter by date, and reorder agenda sessions.
-7. Use **Live Control** separately to change the current LIVE NOW session.
-
-Existing database records are preserved. No manual SQL or new Railway project is required.

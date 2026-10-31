@@ -1,32 +1,43 @@
-# TRAC51 Conference Companion — Production Build v2.4
+# TRAC51 Conference Companion — Production Build v2.2
 
-This build is designed for Railway + GoDaddy. It includes a dedicated Agenda Maintenance screen for full Secretariat CRUD and retains Live Control as a separate operational feature.
+This build is designed for a simple **Railway + GoDaddy** deployment.
 
 ## Architecture
-- Railway: TRAC51 Node.js web application
-- Railway PostgreSQL: conference database
+- Railway: TRAC51 web application
+- Railway PostgreSQL: persistent conference database
 - Railway Volume mounted at `/data`: uploaded reports/slides/photos
 - GoDaddy: existing `tracmy.org` domain and email
 - Public URL: `https://trac51.tracmy.org`
 
-## v2.4 agenda maintenance
-- Dedicated Admin → Agenda Maintenance page
-- Create, read, update, delete agenda sessions
-- Manage date, time, title, venue, status, presenter and session description
-- Presenter selected from active Delegate Directory records
-- Link content/presentation and associated report from the Library
-- Day filter, text search, live status and document-link indicators
-- Move sessions up/down within each conference day
-- Separate Live Control remains the place to set LIVE NOW
+## Features
+- Participant login using NRIC + last 6 digits PIN
+- Raw NRIC never stored; HMAC hashes only
+- Secure HttpOnly participant/admin sessions
+- Login rate limiting
+- Admin-controlled LIVE NOW agenda
+- Immediate live updates using server-sent events
+- Delegate directory
+- Announcements and moderation
+- Event sign-up and cancellation
+- Conference Help Desk
+- Reports, slides and photos
+- Static content management
+- Delegate CSV import
+- Audit log
+- Health endpoint
 
-## Existing features retained
-- Participant NRIC + last-six-digit PIN login with hashed NRIC storage
-- Admin-only APIs and secure sessions
-- Live agenda, realtime updates, delegate directory, feed and moderation
-- Events and registration, help desk, static content, Library and versioned documents
-- Delegate CSV import, audit log and health endpoint
+## Start here
+Read `START-HERE.md`.
 
-## Deployment update
-For an existing Railway deployment, replace the files in the existing private GitHub repository with the contents of this package and let Railway deploy the new commit. Do not create a new project or database. Existing environment variables and PostgreSQL data are retained.
+## Important
+This is a deployment-ready application package, but the final production deployment still requires the organisation to create its own Railway account, secrets, database, domain records and privacy/security approvals. Never commit real delegate NRIC data or production secrets to GitHub.
 
-Do not commit real delegate NRIC data or production secrets to GitHub. Keep `SEED_DEMO=false` for production.
+## v2.2 fixes
+- Demo participant seeding no longer depends on agenda seed data already existing.
+- Participants cannot switch into or navigate to admin views in the UI.
+- All admin API endpoints remain server-side protected by admin sessions.
+- Participant actions remain limited to viewing, registering, reacting, asking questions, and help requests.
+- Added quick reactions to agenda sessions.
+
+## Demo testing
+Set `SEED_DEMO=true` temporarily and redeploy to activate the synthetic participant `900101145678` / `145678`. After testing, set it back to `false` and redeploy; the demo account is automatically deactivated.

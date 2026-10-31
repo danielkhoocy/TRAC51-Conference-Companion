@@ -1,8 +1,8 @@
 {
   "name": "trac51-conference-companion",
-  "version": "2.4.0",
+  "version": "2.3.0",
   "private": true,
-  "description": "TRAC51 Conference Companion - Railway production build with full agenda maintenance",
+  "description": "TRAC51 Conference Companion - Railway production build",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
